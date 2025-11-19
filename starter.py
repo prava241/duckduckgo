@@ -1,98 +1,115 @@
 from itertools import permutations
+# import numpy as np
+import zipfile
+from typing import *
+from collections import defaultdict
+from enum import IntEnum, Enum, unique
+from dataclasses import dataclass
+# from nash_eq import RestrictedGame
+
+@unique
+class Player(IntEnum):
+    One = 0
+    Two = 1
+    Three = 2
+    Four = 3
+    Chance = 4
+
+players = [Player.One, Player.Two, Player.Three, Player.Four]
+player_to_Player = lambda player : {'P1': Player.One, 'P2': Player.Two, 'P3': Player.Three, 'P4': Player.Four, 'C': Player.Chance}[player]
+str_player = lambda player : ['P1', 'P2', 'P3', 'P4', 'C'][player]
+
+@unique
+class Action(IntEnum):
+    Call = 0
+    Fold = 1
+    Raise = 2
+
+actions_to_Actions = lambda actions : [{'C': Action.Call, 'F': Action.Fold, 'R': Action.Raise}[ch] for ch in actions]
+action_to_Action = lambda action : {'C': Action.Call, 'F': Action.Fold, 'R': Action.Raise}[action]
+str_action = lambda action : ['C', 'F', 'R'][action]
 
 class Node:
-    def __init__(self, name, parent, player, actions):
-        self.name = name
-        self.parent = parent
-        self.player = player
-        self.actions = actions
-        self.action_payoffs = {}
-        self.infoset = None
-        self.history = (self.parent.history + 
-                        [] if self.parent.player == "C"
-                        else [(self.parent.infoset, self.name[-1])])
+    def __init__(self, name, parent, player, actions, chance_actions, infoset):
+        self.name : str = name
+        self.parent : Node = parent
+        self.player : Player = player
+        self.actions : Dict[Action, Node | LeafNode] = actions
+        self.chance_actions : Dict[str, Node | LeafNode] = chance_actions
+        self.action_payoffs : Dict[Action, Dict[str, float]] = {}
+        self.infoset : str = infoset
+        self.history : List[Tuple[Player, str, Action]] = (self.parent.history + 
+                        ([(Player.Chance, None, None)] if self.parent.player == "C"
+                        else [(self.parent.player, self.parent.infoset, action_to_Action(self.name[-1]))])) if self.parent else []
 
 class LeafNode:
+    def compute_payoff(self, card_values):
+        pot = [1, 1, 1, 1]
+        folds = set()
+        max_bet = 1
+        raise_amt = 2
+        for player, _, action in self.history:
+            if player == Player.Chance:
+                raise_amt = 4
+            else:
+                if action == Action.Call:
+                    pot[player] = max_bet
+                elif action == Action.Raise:
+                    max_bet += raise_amt
+                    pot[player] = max_bet
+                else:
+                    folds.add(player)
+        best, best_players = 0, []
+        for p in players:
+            if p not in folds:
+                if card_values[self.name[p]] > best:
+                    best_players = [p]
+                elif card_values[self.name[p]] == best:
+                    best_players += [p]
+        pot_total = sum(pot)
+        win = pot_total/len(best_players)
+        team_payoffs = {"13" : sum([win for p in (0, 2) if p in best_players]) - sum([pot[p] for p in (0, 2)]), 
+                        "24" : sum([win for p in (1, 3) if p in best_players]) - sum([pot[p] for p in (1, 3)])}
+        return team_payoffs
+    
     def __init__(self, parent, name):
-        self.name = name
-        def compute_payoff(node_str):
-            pot = [1, 1, 1, 1]
-            folds = set()
-            rounds = node_str.split("C:")
-            for r in range(len(rounds)):
-                raises = rounds[r].split("R")
-                for r in raises[1:]:
-                    for p in range(4):
-                        if "P" + str(p+1) + ":F" in r:
-                            folds.add(p)
-                        for player in pot:
-                            if player not in folds:
-                                pot[player] += 2*(r+1)
-            cards = {"K" : 3, "Q" : 2, "J" : 1}
-            cc = node_str.index("C:")
-            if cc != -1:
-                cards[node_str[cc + 2]] = 4
-            best = 0
-            best_players = [-1]
-            for i in range(4):
-                if i not in folds:
-                    if cards[node_str[i]] > best:
-                        best_players = [i]
-                    elif cards[node_str[i]] == best:
-                        best_players += [i]
-            
-            pot = sum(pot.values())
-            win = pot/len(best_players)
-            team_payoffs = {"13" : sum([win for p in (0, 2) if p in best_players]) - sum([pot[p] for p in (0, 2)]), 
-                            "24" : sum([win for p in (1, 3) if p in best_players]) - sum([pot[p] for p in (1, 3)])}
-            return team_payoffs
-        self.parent = parent
-        self.payoff = compute_payoff(name)
-        self.history = (self.parent.history + 
-                        [] if self.parent.player == "C"
-                        else [(self.parent.infoset, self.name[-1])])
-        # note that chance is scaled, so the payoffs will be scaled
+        self.name : str = name
+        self.parent : Node = parent
+        self.history : List[Tuple[Player, str, Action]] = self.parent.history + (
+            [(Player.Chance, None, None)] if self.parent.player == "C"
+            else [(self.parent.player, self.parent.infoset, action_to_Action(self.name[-1]))])
         s = name[:4]
-        self.chance = 1 if ("J" not in s) or ("Q" not in s) or ("K" not in s) else 2
+        self.chance : float = 1 if ("J" not in s) or ("Q" not in s) or ("K" not in s) else 2
+        cards = {"K" : 3, "Q" : 2, "J" : 1}
         cc = name.find("C:")
         if cc != -1:
             cc = name[cc+2]
             if cc in s:
                 self.chance *= 2
-        
-# class Infoset:
-#     def __init__(self, player, nodes, actions):
-#         self.nodes = {}
-#         for node in nodes:
-#             self.nodes[node] = 1/len(nodes)
-#         self.player = player
-#         self.actions = actions
-    
-#     def update_probs(self, new_probs):
-#         self.nodes = dict.copy(new_probs)
+            cards[cc] = 4
+
+        self.payoff : Dict[str, float] = self.compute_payoff(cards)
 
 class Game:
     def __init__(self):
-        nodes = {} # string to node
-        infosets = {p : {} for p in ["P1", "P2", "P3", "P4"]} # player to infoset to nodes in infoset
+        nodes : Dict[str, Node] = {}
+        infosets : Dict[Player, Dict[str, Dict]] = {p : {} for p in players}
 
         def draw_cards(available_cards = {"J" : 2, "Q" : 2, "K" : 2}, num_cards = 4):
             deck = []
             for card, count in available_cards.items():
                 deck.extend([card] * count)
-            hands = set(permutations(deck, 3))
+            hands = set(permutations(deck, num_cards))
             return hands
         
-        def create_all_nodes(infoset, player, actions):
+        def create_all_nodes(infoset : str, player : Player, actions):
             available_cards = {"J" : 2, "Q" : 2, "K" : 2}
-            players = {"P1" : 0, "P2" : 1, "P3" : 2, "P4" : 3}
-            p = players[player]
             cc = infoset.find("C:")
             if cc != -1:
                 available_cards[infoset[cc + 2]] -= 1
-            available_cards[infoset[p]] -= 1
+            available_cards[infoset[player]] -= 1
 
-            indices = [i for i in range(4) if i != (p)]
+            indices = [i for i in range(4) if i != player]
 
             hands = draw_cards(available_cards, 3)
             
@@ -109,12 +126,13 @@ class Game:
                 if parent not in nodes:
                     assert ('/' in node_str and (node_str.split('/')[-1][:2] == "C:")), node_str
                     parent2 = '/'.join(parent.split('/')[:-1]) if '/' in parent else ""
-                    parent_node = Node(parent, nodes[parent2], "C", {}, None)
+                    parent_node = Node(parent, nodes[parent2], "C", {}, {node_str[-1] : None}, "")
                     nodes[parent] = parent_node
 
                 if node_str not in nodes:
-                    node = Node(node_str, nodes[parent], player, actions, infoset)
+                    node = Node(node_str, nodes[parent], player, actions, {}, infoset)
                     nodes[node_str] = node
+                
                 else:
                     print("node", node_str, "in multiple infosets")
                 
@@ -131,11 +149,11 @@ class Game:
                     parts = line.split()
                     infoset_lines[parts[1]] = ("P" + str(player), parts[2])
         
-        nodes[""] = Node("", None, "C", set(draw_cards(num_cards=3)), None) # TODO: add actions
+        nodes[""] = Node("", None, "C", {}, {}, "") # TODO: add actions
         for infoset in sorted(infoset_lines.keys(), key = len):
-            player = infoset_lines[infoset][0]
-            actions = infoset_lines[infoset][1]
-            infosets[player][infoset] = {"nodes" : create_all_nodes(infoset, player, actions), 
+            player = player_to_Player(infoset_lines[infoset][0])
+            actions = actions_to_Actions(infoset_lines[infoset][1])
+            infosets[player][infoset] = {"nodes" : create_all_nodes(infoset, player, {a : None for a in actions}), 
                                          "actions" : actions}
 
         self.nodes = nodes
@@ -144,20 +162,24 @@ class Game:
         self.leaves = set()
 
         for node_str, node in self.nodes.items():
-            actions_dict = {}
-            for action in node.actions:
-                child = (node_str + "/" + node.player + ":" + action 
-                         if node_str != "" 
-                         else action)
-                if child not in self.nodes:
-                    leaf = LeafNode(node, child)
-                    self.leaves.add(leaf)
-                    actions_dict[action] = leaf
-                    node.action_payoffs[action] = leaf.payoff
-                else:
-                    actions_dict[action] = nodes[child]
-            node.actions = actions_dict
+            if node_str == "":
+                node.chance_actions = {"".join(hand) : nodes["".join(hand)] for hand in draw_cards(num_cards=4)}
+            elif node.player == "C":
+                node.chance_actions = {a : nodes[node.name + "/C:" + a] for a in node.chance_actions}
+            else:
+                actions_dict = {}
+                for action in node.actions:
+                    child : str = node_str + "/" + str_player(node.player) + ":" + str_action(action)
+                    if child not in self.nodes:
+                        leaf = LeafNode(node, child)
+                        self.leaves.add(leaf)
+                        actions_dict[action] = leaf
+                        node.action_payoffs[action] = leaf.payoff
+                    else:
+                        actions_dict[action] = nodes[child]
+                node.actions = actions_dict
 
+'''
 class Strategy:
     team_strategy = {} # dict from player to dict from infoset to actions and probs
 
@@ -259,7 +281,7 @@ class Strategy:
             old_payoff = payoff
             single_player_best_response(my_team[0], my_team[1])
             payoff = single_player_best_response(my_team[1], my_team[0])
-
+'''
 
 
 
@@ -267,7 +289,8 @@ class Strategy:
 
 if __name__ == "__main__":
     game = Game()
-    print(len(game.nodes), len(game.infosets))
-    strategy = Strategy("13", game)
-    strategy.uniform_strategy()
-    print(len(strategy.strategy), len(strategy.strategy["P1"]))
+    print(len(game.nodes), len(game.infosets[Player.One]))
+        
+    # strategy = Strategy("13", game)
+    # strategy.uniform_strategy()
+    # print(len(strategy.strategy), len(strategy.strategy["P1"]))
