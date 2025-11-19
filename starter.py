@@ -179,118 +179,119 @@ class Game:
                         actions_dict[action] = nodes[child]
                 node.actions = actions_dict
 
-'''
-class Strategy:
-    team_strategy = {} # dict from player to dict from infoset to actions and probs
+    def save_game(self, file):
+        # save the game to json
+        pass
 
-    def __init__(self, team, game): 
-        self.team = team # "13" or "24"
-        self.strategy = {"P" + p : {} for p in team}
-        self.game = game
+class Strategy:
+    def __init__(self, team):
+        self.game = Game()
+        self.team = [player_to_Player("P" + p) for p in team]
+        self.opp_team = [p for p in players if p not in self.team]
+        self.strategy = {player : {} for player in self.team}
+        self.opp_strategy = {player : {} for player in self.opp_team}
     
     def uniform_strategy(self, players):
         for p in players:
-            self.strategy[p] = {i : {a : 1/len(i["actions"]) for a in i["actions"]} for i in self.game.infosets[p]}
+            self.strategy[p] = {i : {a : 1/len(v["actions"]) for a in v["actions"]} for i, v in self.game.infosets[p].items()}
     
     # def load_strategy(self, filenames):
     # def save_strategy(self, filenames):
-
-    def best_response(self):
-        my_team = {"13" : ["P2", "P4"], "24" : ["P1", "P3"]}[self.team]
-        swap_team = {"13" : "24", "24" : "13"}[self.team]
-        opp_team = {"24" : ["P2", "P4"], "13" : ["P1", "P3"]}[self.team]
-
-        # TODO: is there an issue with actions being greyed out here?
-        def leaf_node_contributions(players):
+    
+    def pure_br(self):
+        def leaf_node_contributions(my_team=True, chance=False):
             contribs = {}
             visited = set()
             to_visit = [(self.game.nodes[""], 1)]
+            team = self.team if my_team else self.opp_team
+
             while to_visit:
                 next_node, prob = to_visit.pop()
-                if next_node not in visited:
-                    if not next_node.history:
-                        to_visit += [(child, prob) for child in next_node.actions]
+                if next_node in visited:
+                    continue
+                if not next_node.history: # this only happens at the root node
+                    to_visit += [(child, prob) for child in next_node.chance_actions.values()]
+                else:
+                    player, infoset, action = next_node.history[-1]
+                    prob *= (self.strategy[player][infoset][action] 
+                                if player in team else 1)
+                    if isinstance(next_node, LeafNode):
+                        contribs[next_node] = prob
                     else:
-                        infoset, action = next_node.history[-1]
-                        prob *= (self.strategy[infoset.player][infoset][action] 
-                                 if infoset.player in players else 1)
-                        if isinstance(next_node, LeafNode):
-                            contribs[next_node] = prob
-                        else:
-                            to_visit += [(child, prob) for child in next_node.actions]
-            if "C" in players:
-                for leaf in contribs:
-                    contribs[leaf] *= leaf.chance
+                        to_visit += [(child, prob) for child in next_node.actions.values()]
+                        to_visit += [(child, prob) for child in next_node.chance_actions.values()]
+            print(len(contribs), len(self.game.leaves))
+            for leaf in self.game.leaves:
+                if leaf not in contribs:
+                    print(leaf.name)
+            if chance:
+                return {leaf : contribs[leaf] * leaf.chance for leaf in contribs}
             return contribs
+        
+        def construct_ilp(other_contributions):
+            p1, p2 = self.opp_team[0], self.opp_team[1]
+            player_infosets_1 = self.game.infosets[p1]
+            player_infosets_2 = self.game.infosets[p2]
 
-        def create_constraints(player):
-            # (row, col, coeff) for pbounds
-            # (lower, upper) for row in rows [(0, 0)]
-            # (lower, upper) for col in cols [(0.00001, 0)]
-            player_infosets = self.game.infosets[player]
-
-            variables = [(k, a) for k, v in player_infosets.items() for a in v["actions"]]
-            vars_to_indices = {var : i for i, var in enumerate(variables)}
-            vars_to_indices[""] = -1
+            x1 = [(k, a) for k, v in player_infosets_1.items() for a in v["actions"]]
+            x_ind = {x : i for i, x in enumerate(x1)}
+            m = len(x1)
+            x2 = [(k, a) for k, v in player_infosets_2.items() for a in v["actions"]]
+            for i, x in enumerate(x2):
+                x_ind[x] = i + m
+            n = len(x2)
+            
+            def last_actions(leaf_node):
+                last_action_1 = [(i, a) for (p, i, a) in leaf_node.history if p == p1][-1]
+                last_action_2 = [(i, a) for (p, i, a) in leaf_node.history if p == p2][-1]
+                return (last_action_1, last_action_2)
+            
+            leaf_to_y = {leaf : last_actions(leaf) for leaf in self.game.leaves}
+            y = list(set(leaf_to_y.values()))
+            k = len(y)
+            y_ind = {y : i + m + n for i, y in enumerate(y)}
+            leaf_to_y_ind = {leaf : y_ind[v] for leaf, v in leaf_to_y.items()}
 
             constraints = []
             row_bounds = []
-            col_bounds = [(0.00001, 0) for _ in variables]
+            col_bounds = [(0, 1)] * (m + n + k)
 
-            # for each infoset, find the parent (infoset, action) and add a new tuple of (parent, infoset and all actions)
             row = 0
-            for infoset, value in player_infosets:
-                last_player_index = infoset.rfind(player)
-                constraints += [(row, vars_to_indices[(infoset, a)], 1) for a in value["actions"]]
-                if last_player_index == -1:
-                    row_bounds += [(1, 1)]
-                else:
-                    parent = (infoset[:last_player_index-1], infoset[last_player_index + 3])
-                    row_bounds += [(0, 0)]
-                    constraints += [(row, vars_to_indices[parent], -1)]
-                # if the parent index is -1, the vars on the RHS must add to 1, otherwise must add to the var on the LHS
+            for p in self.opp_team:
+                for infoset, v in self.game.infosets[p].items():
+                    constraints += [(row, x_ind[(infoset, action)], 1) for action in v["actions"]]
+                    last_player_index = infoset.rfind(str_player(p))
+                    if last_player_index == -1:
+                        row_bounds += [(1, 1)]
+                    else:
+                        parent = (infoset[:last_player_index-1], action_to_Action(infoset[last_player_index + 3]))
+                        constraints += [(row, x_ind[parent], -1)]
+                        row_bounds += [(0, 0)]
+                row += 1
             
-            leaf_to_var = {}
-            for leaf in opp_team_contributions:
-                i = leaf.name.rfind(player)
-                var = (leaf.name[:i-1], leaf.name[i+3])
-                leaf_to_var[leaf] = vars_to_indices[var]
+            for x1_val, x2_val in y:
+                i = y_ind[(x1_val, x2_val)]
+                constraints += [(row, x_ind[x1_val], 1), (row, i, -1)]
+                row += 1
+                constraints += [(row, x_ind[x2_val], 1), (row, i, -1)]
+                row += 1
 
-            return variables, constraints, row_bounds, col_bounds, leaf_to_var
+            target_coeffs = [0] * (m + n + k)
+            for leaf, var in leaf_to_y_ind.items():
+                target_coeffs[var] += other_contributions[leaf]
+
+            return (x1, x2, y), (x_ind, y_ind), (constraints, row_bounds, col_bounds), target_coeffs
         
-        def create_target(variables, leaf_to_var, other_contributions):
-            coeffs = [0 for _ in variables]
-            for leaf, var in leaf_to_var.items():
-                coeffs[var] += other_contributions[leaf]
-            return coeffs
+        other_contributions = leaf_node_contributions(my_team=True, chance=True)
+        other_team = "13" if Player.One in self.opp_team else "24"
+        other_contributions = {leaf : other_contributions[leaf] * leaf.payoff[other_team] for leaf in self.game.leaves}
 
-        def single_player_best_response(player):
-            other_contributions = {leaf : opp_team_contributions[leaf] * teammate_contributions[leaf] 
-                                   for leaf in teammate_contributions}
-            # return target, 
-
-        self.uniform_strategy(my_team)
-        opp_team_contributions = leaf_node_contributions(["C"] + opp_team)
-        opp_team_contributions = {leaf : opp_team_contributions * leaf.payoff[swap_team] for leaf in self.game.leaves}
-        teammate_contributions = leaf_node_contributions([my_team[1]])
-        constraints = [create_constraints(player) for player in my_team]
-
-        old_payoff, payoff = -1000, -500
-        threshold = 0.5
-        while payoff - old_payoff > threshold:
-            old_payoff = payoff
-            single_player_best_response(my_team[0], my_team[1])
-            payoff = single_player_best_response(my_team[1], my_team[0])
-'''
-
-
+        variables, var_indices, constraints, target = construct_ilp(other_contributions)
+        print(len(var_indices), len(constraints))
 
 
 
 if __name__ == "__main__":
-    game = Game()
-    print(len(game.nodes), len(game.infosets[Player.One]))
-        
-    # strategy = Strategy("13", game)
-    # strategy.uniform_strategy()
-    # print(len(strategy.strategy), len(strategy.strategy["P1"]))
+    strategy = Strategy("13")
+    strategy.uniform_strategy([Player.One, Player.Three])
+    strategy.pure_br()
