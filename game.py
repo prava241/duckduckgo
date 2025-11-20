@@ -1,11 +1,7 @@
 from itertools import permutations
-# import numpy as np
-import zipfile
 from typing import *
-from collections import defaultdict
-from enum import IntEnum, Enum, unique
+from enum import IntEnum, unique
 from dataclasses import dataclass
-# from nash_eq import RestrictedGame
 
 @unique
 class Player(IntEnum):
@@ -39,7 +35,7 @@ class Node:
         self.action_payoffs : Dict[Action, Dict[str, float]] = {}
         self.infoset : str = infoset
         self.history : List[Tuple[Player, str, Action]] = (self.parent.history + 
-                        ([(Player.Chance, None, None)] if self.parent.player == "C"
+                        ([(Player.Chance, None, None)] if self.parent.player == Player.Chance
                         else [(self.parent.player, self.parent.infoset, action_to_Action(self.name[-1]))])) if self.parent else []
 
 class LeafNode:
@@ -76,7 +72,7 @@ class LeafNode:
         self.name : str = name
         self.parent : Node = parent
         self.history : List[Tuple[Player, str, Action]] = self.parent.history + (
-            [(Player.Chance, None, None)] if self.parent.player == "C"
+            [(Player.Chance, None, None)] if self.parent.player == Player.Chance
             else [(self.parent.player, self.parent.infoset, action_to_Action(self.name[-1]))])
         s = name[:4]
         self.chance : float = 1 if ("J" not in s) or ("Q" not in s) or ("K" not in s) else 2
@@ -87,6 +83,8 @@ class LeafNode:
             if cc in s:
                 self.chance *= 2
             cards[cc] = 4
+        else:
+            self.chance *= 2
 
         self.payoff : Dict[str, float] = self.compute_payoff(cards)
 
@@ -124,10 +122,11 @@ class Game:
                 # if the parent is not in nodes (this could happen since the node after player 4 plays before the community card comes out)
                 # assert that the last element in split is a chance action
                 if parent not in nodes:
-                    assert ('/' in node_str and (node_str.split('/')[-1][:2] == "C:")), node_str
                     parent2 = '/'.join(parent.split('/')[:-1]) if '/' in parent else ""
-                    parent_node = Node(parent, nodes[parent2], "C", {}, {node_str[-1] : None}, "")
+                    parent_node = Node(parent, nodes[parent2], Player.Chance, {}, {node_str[-1] : None}, "")
                     nodes[parent] = parent_node
+                elif nodes[parent].player == Player.Chance:
+                    nodes[parent].chance_actions[node_str[-1]] = None
 
                 if node_str not in nodes:
                     node = Node(node_str, nodes[parent], player, actions, {}, infoset)
@@ -149,7 +148,7 @@ class Game:
                     parts = line.split()
                     infoset_lines[parts[1]] = ("P" + str(player), parts[2])
         
-        nodes[""] = Node("", None, "C", {}, {}, "") # TODO: add actions
+        nodes[""] = Node("", None, Player.Chance, {}, {}, "") # TODO: add actions
         for infoset in sorted(infoset_lines.keys(), key = len):
             player = player_to_Player(infoset_lines[infoset][0])
             actions = actions_to_Actions(infoset_lines[infoset][1])
@@ -164,7 +163,7 @@ class Game:
         for node_str, node in self.nodes.items():
             if node_str == "":
                 node.chance_actions = {"".join(hand) : nodes["".join(hand)] for hand in draw_cards(num_cards=4)}
-            elif node.player == "C":
+            elif node.player == Player.Chance:
                 node.chance_actions = {a : nodes[node.name + "/C:" + a] for a in node.chance_actions}
             else:
                 actions_dict = {}
@@ -220,10 +219,6 @@ class Strategy:
                     else:
                         to_visit += [(child, prob) for child in next_node.actions.values()]
                         to_visit += [(child, prob) for child in next_node.chance_actions.values()]
-            print(len(contribs), len(self.game.leaves))
-            for leaf in self.game.leaves:
-                if leaf not in contribs:
-                    print(leaf.name)
             if chance:
                 return {leaf : contribs[leaf] * leaf.chance for leaf in contribs}
             return contribs
@@ -272,8 +267,10 @@ class Strategy:
             for x1_val, x2_val in y:
                 i = y_ind[(x1_val, x2_val)]
                 constraints += [(row, x_ind[x1_val], 1), (row, i, -1)]
+                row_bounds += [(0, 1)]
                 row += 1
                 constraints += [(row, x_ind[x2_val], 1), (row, i, -1)]
+                row_bounds += [(0, 1)]
                 row += 1
 
             target_coeffs = [0] * (m + n + k)
@@ -287,7 +284,7 @@ class Strategy:
         other_contributions = {leaf : other_contributions[leaf] * leaf.payoff[other_team] for leaf in self.game.leaves}
 
         variables, var_indices, constraints, target = construct_ilp(other_contributions)
-        print(len(var_indices), len(constraints))
+        print(len(var_indices[0]), len(constraints[0]))
 
 
 
