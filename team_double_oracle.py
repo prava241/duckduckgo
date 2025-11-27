@@ -42,6 +42,9 @@ class TeamDoubleOracle:
     def update_utilities(self, trial: int):
 
         def pure_strategies_average_utility(p1_strat, p2_strat, p3_strat, p4_strat):
+            # for each leaf node, the odds of being at this node are the product of the 
+            # sequence form probs of all players and the chance probs
+            # strategy representation 
             pass
 
         def update_utilities_for_player(player: Player):

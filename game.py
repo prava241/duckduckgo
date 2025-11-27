@@ -2,6 +2,7 @@ from itertools import permutations
 from typing import *
 from enum import IntEnum, unique
 from dataclasses import dataclass
+import pickle
 
 @unique
 class Player(IntEnum):
@@ -31,7 +32,7 @@ class Node:
         self.parent : Node = parent
         self.player : Player = player
         self.actions : Dict[Action, Node | LeafNode] = actions
-        self.chance_actions : Dict[str, Node | LeafNode] = chance_actions
+        self.chance_actions : Dict[str, Node | LeafNode | None] = chance_actions
         self.action_payoffs : Dict[Action, Dict[str, float]] = {}
         self.infoset : str = infoset
         self.history : List[Tuple[Player, str, Action]] = (self.parent.history + 
@@ -178,51 +179,58 @@ class Game:
                         actions_dict[action] = nodes[child]
                 node.actions = actions_dict
 
-    def save_game(self, file):
-        # save the game to json
-        pass
+    def save_game(self, filename="game.pkl"):
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
 
-class Strategy:
-    def __init__(self, team):
-        self.game = Game()
+class PureStrategy:
+    def __init__(self, team, filename="game.pkl", strategy={}, combined_no_chance={}, combined_chance={}):
+        if filename is None:
+            self.game = Game()
+        else:
+            with open(filename, 'rb') as f:
+                self.game = pickle.load(f)
         self.team = [player_to_Player("P" + p) for p in team]
         self.opp_team = [p for p in players if p not in self.team]
-        self.strategy = {player : {} for player in self.team}
-        self.opp_strategy = {player : {} for player in self.opp_team}
+        self.strategy = strategy
+        if strategy and not combined_no_chance:
+            self.combined_no_chance = self.leaf_node_contributions()
+            self.combined_chance = {leaf : leaf.chance * self.combined_no_chance[leaf] for leaf in self.game.leaves}
+        else:
+            self.combined_no_chance = combined_no_chance
+            self.combined_chance = combined_chance
+
+    def leaf_node_contributions(self):
+        contribs = {}
+        visited = set()
+        to_visit = [(self.game.nodes[""], 1)]
+        while to_visit:
+            next_node, prob = to_visit.pop()
+            if next_node in visited:
+                continue
+            if not next_node.history: # this only happens at the root node
+                to_visit += [(child, prob) for child in next_node.chance_actions.values()]
+            else:
+                player, infoset, action = next_node.history[-1]
+                prob *= (self.strategy[player][infoset][action] 
+                            if player in self.team else 1)
+                if isinstance(next_node, LeafNode):
+                    contribs[next_node] = prob
+                else:
+                    to_visit += [(child, prob) for child in next_node.actions.values()]
+                    to_visit += [(child, prob) for child in next_node.chance_actions.values()]
+        return contribs
     
     def uniform_strategy(self, players):
         for p in players:
             self.strategy[p] = {i : {a : 1/len(v["actions"]) for a in v["actions"]} for i, v in self.game.infosets[p].items()}
+        self.combined_no_chance = self.leaf_node_contributions()
+        self.combined_chance = {leaf : leaf.chance * self.combined_no_chance[leaf] for leaf in self.game.leaves}
     
     # def load_strategy(self, filenames):
     # def save_strategy(self, filenames):
     
-    def pure_br(self):
-        def leaf_node_contributions(my_team=True, chance=False):
-            contribs = {}
-            visited = set()
-            to_visit = [(self.game.nodes[""], 1)]
-            team = self.team if my_team else self.opp_team
-
-            while to_visit:
-                next_node, prob = to_visit.pop()
-                if next_node in visited:
-                    continue
-                if not next_node.history: # this only happens at the root node
-                    to_visit += [(child, prob) for child in next_node.chance_actions.values()]
-                else:
-                    player, infoset, action = next_node.history[-1]
-                    prob *= (self.strategy[player][infoset][action] 
-                                if player in team else 1)
-                    if isinstance(next_node, LeafNode):
-                        contribs[next_node] = prob
-                    else:
-                        to_visit += [(child, prob) for child in next_node.actions.values()]
-                        to_visit += [(child, prob) for child in next_node.chance_actions.values()]
-            if chance:
-                return {leaf : contribs[leaf] * leaf.chance for leaf in contribs}
-            return contribs
-        
+    def pure_br(self):        
         def construct_ilp(other_contributions):
             p1, p2 = self.opp_team[0], self.opp_team[1]
             player_infosets_1 = self.game.infosets[p1]
@@ -279,16 +287,15 @@ class Strategy:
 
             return (x1, x2, y), (x_ind, y_ind), (constraints, row_bounds, col_bounds), target_coeffs
         
-        other_contributions = leaf_node_contributions(my_team=True, chance=True)
         other_team = "13" if Player.One in self.opp_team else "24"
-        other_contributions = {leaf : other_contributions[leaf] * leaf.payoff[other_team] for leaf in self.game.leaves}
+        other_contributions = {leaf : self.combined_chance[leaf] * leaf.payoff[other_team] for leaf in self.game.leaves}
 
         variables, var_indices, constraints, target = construct_ilp(other_contributions)
-        print(len(var_indices[0]), len(constraints[0]))
+        # return a strategy
 
 
 
 if __name__ == "__main__":
-    strategy = Strategy("13")
+    strategy = PureStrategy("13")
     strategy.uniform_strategy([Player.One, Player.Three])
     strategy.pure_br()
