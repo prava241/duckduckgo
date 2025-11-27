@@ -1,8 +1,11 @@
+from __future__ import annotations
 from itertools import permutations
 from typing import *
 from enum import IntEnum, unique
 from dataclasses import dataclass
 import pickle
+import numpy as np
+import highspy
 
 @unique
 class Player(IntEnum):
@@ -148,6 +151,7 @@ class Game:
                 for line in lines:
                     parts = line.split()
                     infoset_lines[parts[1]] = ("P" + str(player), parts[2])
+                # TODO: save infoset ordering
         
         nodes[""] = Node("", None, Player.Chance, {}, {}, "") # TODO: add actions
         for infoset in sorted(infoset_lines.keys(), key = len):
@@ -159,7 +163,7 @@ class Game:
         self.nodes = nodes
         self.infosets = infosets
         self.root = ""
-        self.leaves = set()
+        self.leaves = []
 
         for node_str, node in self.nodes.items():
             if node_str == "":
@@ -172,120 +176,144 @@ class Game:
                     child : str = node_str + "/" + str_player(node.player) + ":" + str_action(action)
                     if child not in self.nodes:
                         leaf = LeafNode(node, child)
-                        self.leaves.add(leaf)
+                        self.leaves += [leaf]
                         actions_dict[action] = leaf
                         node.action_payoffs[action] = leaf.payoff
                     else:
                         actions_dict[action] = nodes[child]
                 node.actions = actions_dict
+        
+        self.payoffs_13 = np.array([leaf.payoff["13"] for leaf in self.leaves])
+        self.payoffs_24 = self.payoffs_13 * (-1)
+        self.chances = np.array([leaf.chance for leaf in self.leaves])
+        self.chance_payoffs_13 = self.chances * self.payoffs_13
+        self.chance_payoffs_24 = self.chance_payoffs_13 * -1
 
     def save_game(self, filename="game.pkl"):
         with open(filename, 'wb') as f:
             pickle.dump(self, f)
 
-class PureStrategy:
-    def __init__(self, team, filename="game.pkl", strategy={}, combined_no_chance={}, combined_chance={}):
+    def save_constraints(self, team=(Player.One, Player.Three), filename="constraints.pkl"):
+        p1, p2 = team
+        player_infosets_1 = self.infosets[p1]
+        player_infosets_2 = self.infosets[p2]
+
+        x1 = [(k, a) for k, v in player_infosets_1.items() for a in v["actions"]]
+        x_ind = {x : i for i, x in enumerate(x1)}
+        m = len(x1)
+        x2 = [(k, a) for k, v in player_infosets_2.items() for a in v["actions"]]
+        for i, x in enumerate(x2):
+            x_ind[x] = i + m
+        n = len(x2)
+        
+        def last_actions(leaf_node):
+            last_action_1 = [(i, a) for (p, i, a) in leaf_node.history if p == p1][-1]
+            last_action_2 = [(i, a) for (p, i, a) in leaf_node.history if p == p2][-1]
+            return (last_action_1, last_action_2)
+        
+        leaf_to_y = [last_actions(leaf) for leaf in self.leaves]
+        y = list(set(leaf_to_y))
+        k = len(y)
+        y_ind = {y : i + m + n for i, y in enumerate(y)}
+        leaf_to_y_ind = [y_ind[action] for action in leaf_to_y]
+
+        constraints = []
+        row_bounds = []
+        col_bounds = [(0, 1)] * (m + n + k)
+
+        row = 0
+        for p in team:
+            for infoset, v in self.infosets[p].items():
+                constraints += [(row, x_ind[(infoset, action)], 1) for action in v["actions"]]
+                last_player_index = infoset.rfind(str_player(p))
+                if last_player_index == -1:
+                    row_bounds += [(1, 1)]
+                else:
+                    parent = (infoset[:last_player_index-1], action_to_Action(infoset[last_player_index + 3]))
+                    constraints += [(row, x_ind[parent], -1)]
+                    row_bounds += [(0, 0)]
+            row += 1
+        
+        for x1_val, x2_val in y:
+            i = y_ind[(x1_val, x2_val)]
+            constraints += [(row, x_ind[x1_val], 1), (row, i, -1)]
+            row_bounds += [(0, 1)]
+            row += 1
+            constraints += [(row, x_ind[x2_val], 1), (row, i, -1)]
+            row_bounds += [(0, 1)]
+            row += 1
+
+        with open(filename, 'wb') as f:
+            to_save = ((x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds))
+            pickle.dump(to_save, f)
+
+class Strategy:
+    def __init__(self, team : str, filename="game.pkl", strategies=[], seq_form=np.array([]), all_contribs=np.array([])):
         if filename is None:
             self.game = Game()
         else:
             with open(filename, 'rb') as f:
                 self.game = pickle.load(f)
+        self.team_name = team
         self.team = [player_to_Player("P" + p) for p in team]
         self.opp_team = [p for p in players if p not in self.team]
-        self.strategy = strategy
-        if strategy and not combined_no_chance:
-            self.combined_no_chance = self.leaf_node_contributions()
-            self.combined_chance = {leaf : leaf.chance * self.combined_no_chance[leaf] for leaf in self.game.leaves}
-        else:
-            self.combined_no_chance = combined_no_chance
-            self.combined_chance = combined_chance
+        self.strategies = strategies
+        self.seq_form = seq_form
+        self.all_contribs = all_contribs
+        if len(strategies) > 0 and len(seq_form) == 0:
+            self.calculate_contribs()
 
-    def leaf_node_contributions(self):
+    def calculate_contribs(self):
         contribs = {}
-        visited = set()
-        to_visit = [(self.game.nodes[""], 1)]
-        while to_visit:
-            next_node, prob = to_visit.pop()
-            if next_node in visited:
-                continue
-            if not next_node.history: # this only happens at the root node
-                to_visit += [(child, prob) for child in next_node.chance_actions.values()]
-            else:
-                player, infoset, action = next_node.history[-1]
-                prob *= (self.strategy[player][infoset][action] 
-                            if player in self.team else 1)
-                if isinstance(next_node, LeafNode):
-                    contribs[next_node] = prob
-                else:
-                    to_visit += [(child, prob) for child in next_node.actions.values()]
+        for strategy, strategy_prob in self.strategies:
+            visited = set()
+            to_visit = [(self.game.nodes[""], strategy_prob)]
+            while to_visit:
+                next_node, prob = to_visit.pop()
+                if next_node in visited:
+                    continue
+                if not next_node.history:
                     to_visit += [(child, prob) for child in next_node.chance_actions.values()]
-        return contribs
+                else:
+                    player, infoset, action = next_node.history[-1]
+                    prob *= (strategy[player][infoset][action] 
+                                if player in self.team else 1)
+                    if isinstance(next_node, LeafNode):
+                        if next_node in contribs:
+                            contribs[next_node] += prob
+                        else:
+                            contribs[next_node] = prob
+                    else:
+                        to_visit += [(child, prob) for child in next_node.actions.values()]
+                        to_visit += [(child, prob) for child in next_node.chance_actions.values()]
+        self.seq_form = np.array([contribs[leaf] for leaf in self.game.leaves])
+        self.all_contribs = ((self.game.chance_payoffs_24 * self.seq_form) 
+                             if self.team_name == "13" 
+                             else (self.game.chance_payoffs_13 * self.seq_form))
     
-    def uniform_strategy(self, players):
-        for p in players:
-            self.strategy[p] = {i : {a : 1/len(v["actions"]) for a in v["actions"]} for i, v in self.game.infosets[p].items()}
-        self.combined_no_chance = self.leaf_node_contributions()
-        self.combined_chance = {leaf : leaf.chance * self.combined_no_chance[leaf] for leaf in self.game.leaves}
+    def uniform_strategy(self):
+        strategy = {}
+        for p in self.team:
+            strategy[p] = {i : {a : 1/len(v["actions"]) for a in v["actions"]} for i, v in self.game.infosets[p].items()}
+        self.strategies = [(strategy, 1)]
+        self.calculate_contribs()
+
+    def random_strategy(self):
+        strategy = {}
+        for p in self.team:
+            strategy[p] = {i : {a : 0 for a in v["actions"]} for i, v in self.game.infosets[p].items()}
+            for i, d in strategy[p].items():
+                a = np.random.choice(list(d.keys()))
+                strategy[p][i][a] = 1
+        self.strategies = [(strategy, 1)]
+        self.calculate_contribs()
     
     # def load_strategy(self, filenames):
     # def save_strategy(self, filenames):
     
-    def pure_br(self):
-        filename = "constraints24.pkl" if Player.One in self.team else "constraints13.pkl"
-        def save_constraints(filename="constraints.pkl"):
-            p1, p2 = self.opp_team[0], self.opp_team[1]
-            player_infosets_1 = self.game.infosets[p1]
-            player_infosets_2 = self.game.infosets[p2]
-
-            x1 = [(k, a) for k, v in player_infosets_1.items() for a in v["actions"]]
-            x_ind = {x : i for i, x in enumerate(x1)}
-            m = len(x1)
-            x2 = [(k, a) for k, v in player_infosets_2.items() for a in v["actions"]]
-            for i, x in enumerate(x2):
-                x_ind[x] = i + m
-            n = len(x2)
-            
-            def last_actions(leaf_node):
-                last_action_1 = [(i, a) for (p, i, a) in leaf_node.history if p == p1][-1]
-                last_action_2 = [(i, a) for (p, i, a) in leaf_node.history if p == p2][-1]
-                return (last_action_1, last_action_2)
-            
-            leaf_to_y = {leaf : last_actions(leaf) for leaf in self.game.leaves}
-            y = list(set(leaf_to_y.values()))
-            k = len(y)
-            y_ind = {y : i + m + n for i, y in enumerate(y)}
-            leaf_to_y_ind = {leaf : y_ind[v] for leaf, v in leaf_to_y.items()}
-
-            constraints = []
-            row_bounds = []
-            col_bounds = [(0, 1)] * (m + n + k)
-
-            row = 0
-            for p in self.opp_team:
-                for infoset, v in self.game.infosets[p].items():
-                    constraints += [(row, x_ind[(infoset, action)], 1) for action in v["actions"]]
-                    last_player_index = infoset.rfind(str_player(p))
-                    if last_player_index == -1:
-                        row_bounds += [(1, 1)]
-                    else:
-                        parent = (infoset[:last_player_index-1], action_to_Action(infoset[last_player_index + 3]))
-                        constraints += [(row, x_ind[parent], -1)]
-                        row_bounds += [(0, 0)]
-                row += 1
-            
-            for x1_val, x2_val in y:
-                i = y_ind[(x1_val, x2_val)]
-                constraints += [(row, x_ind[x1_val], 1), (row, i, -1)]
-                row_bounds += [(0, 1)]
-                row += 1
-                constraints += [(row, x_ind[x2_val], 1), (row, i, -1)]
-                row_bounds += [(0, 1)]
-                row += 1
-
-            with open(filename, 'wb') as f:
-                to_save = ((x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds))
-                pickle.dump(to_save, f)
-        
+    def best_response(self) -> Strategy:
+        other_team_name = {"13":"24", "24":"13"}[self.team_name]
+        filename = f"constraints{other_team_name}.pkl"
         def load_constraints(filename="constraints.pkl"):
             with open(filename, 'rb') as f:
                 (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds) = pickle.load(f)
@@ -293,19 +321,39 @@ class PureStrategy:
         
         def construct_target(num_vars, leaf_to_y_ind):
             target_coeffs = [0] * num_vars
-            for leaf, var in leaf_to_y_ind.items():
-                target_coeffs[var] += other_contributions[leaf]
+            # TODO: should i add the constant to leaf payoffs or to target_coeffs?
+            for i, var in enumerate(leaf_to_y_ind):
+                target_coeffs[var] += self.all_contribs[i]
             return target_coeffs
-        
-        other_team = "13" if Player.One in self.opp_team else "24"
-        other_contributions = {leaf : self.combined_chance[leaf] * leaf.payoff[other_team] for leaf in self.game.leaves}
 
-        save_constraints(filename)
-        # return a strategy
+        load_constraints(filename)
+
+        # TODO: write the Highs code
+        # h = highspy.Highs()
+
+        # h.run()
+        # solution = h.getSolution()
+        # basis = h.getBasis()
+        # info = h.getInfo()
+        # model_status = h.getModelStatus()
+        # print('Model status = ', h.modelStatusToString(model_status))
+        # print()
+        # print('Optimal objective = ', info.objective_function_value)
+        # print('Iteration count = ', info.simplex_iteration_count)
+        # print('Primal solution status = ', h.solutionStatusToString(info.primal_solution_status))
+        # print('Dual solution status = ', h.solutionStatusToString(info.dual_solution_status))
+        # print('Basis validity = ', h.basisValidityToString(info.basis_validity))
+        
+        other_team_name = "24" if self.team_name == "13" else "13"
+        return Strategy(other_team_name)
 
 
 
 if __name__ == "__main__":
-    strategy = PureStrategy("24")
-    strategy.uniform_strategy([Player.Two, Player.Four])
-    strategy.pure_br()
+    game = Game()
+    game.save_game()
+    game.save_constraints((Player.One, Player.Three), "constraints13.pkl")
+    game.save_constraints((Player.Two, Player.Four), "constraints24.pkl")
+    strategy = Strategy("24")
+    strategy.uniform_strategy()
+    strategy.best_response()

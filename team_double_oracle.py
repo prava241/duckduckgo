@@ -4,78 +4,59 @@ from typing import *
 from dataclasses import dataclass
 from game import *
 
-@dataclass(frozen=True)
-class PureStrategy:
-    strategy: Dict[str, Action]
-
 class TeamDoubleOracle:
-
-    def __init__(self, team: Tuple[Player], tolerance = 1.):
-        self.populations: Dict[Player, List[PureStrategy]] = {}
-        self.team: Tuple[Player]= team
+    def __init__(self, tolerance = 1., game_file="game.pkl"):
+        self.populations: Dict[str, List[Strategy]] = {}
         self.tolerance: float = tolerance
-        self.utilities: Dict[Tuple[int, int, int, int], float] = {}
-
-    def iterate(self, trial: int) -> Tuple[bool, List[float], List[float]]:
-        team_mixture, opponent_mixture = self.get_mixtures()
-        team_best_response, opponent_best_response = opponent_mixture.best_response(), team_mixture.best_response()
-        
-        best_responses = [None, None, None, None]
-        if self.team == (Player.One, Player.Three):
-            best_responses[0], best_responses[2] = team_best_response
-            best_responses[1], best_responses[3] = opponent_best_response
+        self.utilities: Dict[Tuple[int, int], float] = {}
+        if game_file is None:
+            self.game = Game()
         else:
-            best_responses[0], best_responses[2] = opponent_best_response
-            best_responses[1], best_responses[3] = team_best_response
+            with open(game_file, 'rb') as f:
+                self.game = pickle.load(f)
 
-        for player, best_response in zip(players, best_responses):
-            self.populations[player].append(best_response)
+    def compute_utility(self, strat13 : Strategy, strat24 : Strategy) -> float:
+        payoff13 = np.sum(strat13.seq_form * strat24.all_contribs)
+        return payoff13
+
+    def iterate(self, trial: int) -> Tuple[bool, Strategy, Strategy]:
+        strat_13, strat_24 = self.get_nash_strategies() # this is the nash equilibrium step
+        br_24, br_13 = strat_13.best_response(), strat_24.best_response()
+        self.populations["13"].append(br_13)
+        self.populations["24"].append(br_24)
+
         self.update_utilities(trial)
         
-        eq_utility = self.utility(team_mixture, opponent_mixture)
-        team_br_utility = self.utility(team_best_response, opponent_mixture)
-        opponent_br_utility = self.utility(team_mixture, opponent_best_response)
+        eq_utility = self.compute_utility(strat_13, strat_24)
+        br_utility_13 = self.compute_utility(br_13, strat_24)
+        br_utility_24 = self.compute_utility(strat_13, br_24)
 
-        converged = abs(eq_utility - team_br_utility) < self.tolerance and abs(team_br_utility - opponent_br_utility) < self.tolerance
-        return converged, team_mixture, opponent_mixture
+        converged = abs(eq_utility - br_utility_13) < self.tolerance and abs(eq_utility - br_utility_24) < self.tolerance
+        return converged, br_13, br_24
     
-    def update_utilities(self, trial: int):
-
-        def pure_strategies_average_utility(p1_strat, p2_strat, p3_strat, p4_strat):
-            # for each leaf node, the odds of being at this node are the product of the 
-            # sequence form probs of all players and the chance probs
-            # strategy representation 
-            pass
-
-        def update_utilities_for_player(player: Player):
-            other_players = players[:]
-            other_players.remove(player)
-
-            player_new_strat = self.populations[player][-1]
-            for i, i_strat in enumerate(self.populations[other_players[0]]):
-                for j, j_strat in enumerate(self.populations[other_players[1]]):
-                    for k, k_strat in enumerate(self.populations[other_players[2]]):
-                        strats = [None, None, None, None]
-                        strats[other_players[0]] = i_strat
-                        strats[other_players[1]] = j_strat
-                        strats[other_players[2]] = k_strat
-                        strats[player] = player_new_strat
-
-                        indices = [0,0,0,0]
-                        strats[other_players[0]] = i
-                        strats[other_players[1]] = j
-                        strats[other_players[2]] = k
-                        strats[player] = trial
-
-                        self.utilities[tuple(indices)] = pure_strategies_average_utility(*strats)
+    def update_utilities(self, trial: int) -> None:
+        for i in range(trial):
+            self.utilities[(i, trial)] = self.compute_utility(self.populations["13"][i], self.populations["24"][trial])
+            self.utilities[(trial, i)] = self.compute_utility(self.populations["13"][trial], self.populations["24"][i])
+        self.utilities[(trial, trial)] = self.compute_utility(self.populations["13"][trial], self.populations["24"][trial])
         
-        for player in players:
-            update_utilities_for_player(player)
-        return
-        
-    def get_mixtures(self):
-        pass
+    def get_nash_strategies(self) -> Tuple[Strategy, Strategy]:
+        # TODO: get the actual Nash mixture
+        mixtures = [("13", []), ("24", [])] # say this is two lists of probs
 
+        nash_strategies = []
+        for team, mix in mixtures:
+            team_strategies = []
+            team_seq_form = np.zeros(len(self.game.leaves))
+            for i, prob in enumerate(mix):
+                pure_strat = self.populations[team][i]
+                team_strategies += [(pure_strat.strategies[0][0], prob)]
+                team_seq_form += pure_strat.seq_form * prob # this should be an np.add ?
+            team_all_contribs = team_seq_form * (self.game.chance_payoffs_24 if team == "13" else self.game.chance_payoffs_13)
+            nash_strategies += [Strategy(team, "game.pkl", team_strategies, team_seq_form, team_all_contribs)]
+        return tuple(nash_strategies)
+
+    # TODO will probably have to store the infoset ordering during Game construction
     def mixture_to_tensors(self, mixture: List[float], team: Tuple[Player, Player]):
         strategies_1 = self.populations[team[0]]
         strategies_2 = self.populations[team[1]]
@@ -106,24 +87,26 @@ class TeamDoubleOracle:
 
         return normalize(out_1), normalize(out_2)
 
-    def train(self, trials = 1000):
-        self.utilities = [[0] * trials] * trials
-
-        team_mixture, opponent_mixture = None, None
+    def train(self, num_rand = 3, trials = 1000):
+        for team in ["13", "24"]:
+            self.populations[team] = [Strategy(team) for _ in range(num_rand)]
+            for strat in self.populations[team]:
+                strat.random_strategy()
+        self.utilities = {(i, j) : self.compute_utility(self.populations["13"][i], self.populations["24"][j]) 
+                          for i in range(num_rand) for j in range(num_rand)}
+        
+        # TODO: idk this is weird
         for trial in range(trials):
-            converged, team_mixture, opponent_mixture = self.iterate(trial)
+            converged, team_mixture, opponent_mixture = self.iterate(trial + num_rand)
             if converged:
                 print(f"Converged at trial: {trial}")
                 return team_mixture, opponent_mixture
-            if trial % 100:
+            if (trial % 100) == 0:
                 print(f"Progress: {(100 * trial) / trials}%")
             
         return team_mixture, opponent_mixture
             
 
 if __name__ == "__main__":
-    game = Game()
-    print(len(game.nodes), len(game.infosets))
-    strategy = Strategy((Player.One, Player.Three), game)
+    strategy = Strategy("13")
     strategy.uniform_strategy()
-    print(len(strategy.strategy), len(strategy.strategy[Player.One]))
