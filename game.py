@@ -230,8 +230,9 @@ class PureStrategy:
     # def load_strategy(self, filenames):
     # def save_strategy(self, filenames):
     
-    def pure_br(self):        
-        def construct_ilp(other_contributions):
+    def pure_br(self):
+        filename = "constraints24.pkl" if Player.One in self.team else "constraints13.pkl"
+        def save_constraints(filename="constraints.pkl"):
             p1, p2 = self.opp_team[0], self.opp_team[1]
             player_infosets_1 = self.game.infosets[p1]
             player_infosets_2 = self.game.infosets[p2]
@@ -281,21 +282,30 @@ class PureStrategy:
                 row_bounds += [(0, 1)]
                 row += 1
 
-            target_coeffs = [0] * (m + n + k)
+            with open(filename, 'wb') as f:
+                to_save = ((x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds))
+                pickle.dump(to_save, f)
+        
+        def load_constraints(filename="constraints.pkl"):
+            with open(filename, 'rb') as f:
+                (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds) = pickle.load(f)
+            return (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds)
+        
+        def construct_target(num_vars, leaf_to_y_ind):
+            target_coeffs = [0] * num_vars
             for leaf, var in leaf_to_y_ind.items():
                 target_coeffs[var] += other_contributions[leaf]
-
-            return (x1, x2, y), (x_ind, y_ind), (constraints, row_bounds, col_bounds), target_coeffs
+            return target_coeffs
         
         other_team = "13" if Player.One in self.opp_team else "24"
         other_contributions = {leaf : self.combined_chance[leaf] * leaf.payoff[other_team] for leaf in self.game.leaves}
 
-        variables, var_indices, constraints, target = construct_ilp(other_contributions)
+        save_constraints(filename)
         # return a strategy
 
 
 
 if __name__ == "__main__":
-    strategy = PureStrategy("13")
-    strategy.uniform_strategy([Player.One, Player.Three])
+    strategy = PureStrategy("24")
+    strategy.uniform_strategy([Player.Two, Player.Four])
     strategy.pure_br()
