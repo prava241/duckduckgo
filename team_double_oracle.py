@@ -20,8 +20,38 @@ class TeamDoubleOracle:
         self.l_13 = constraints_13[2]
         self.l_24 = constraints_24[2]
 
-        self.h_br_13, self.h_br_24 = None, None
-        # initialize h_br_13, h_br_24 using the constraints
+        for team in ("13", "24"):
+            c = constraints_13 if team == "13" else constraints_24
+            (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds) = c
+            h = highspy.Highs()
+            num_vars = len(x1) + len(x2) + len(y)
+
+            h.addCols(
+                num_vars,
+                np.array([0] * num_vars, dtype=np.float64),
+                np.array([0] * num_vars, dtype=np.float64),
+                np.array([1] * num_vars, dtype=np.float64),
+                0,  
+                np.array([], dtype=np.int32),
+                np.array([], dtype=np.int32),
+                np.array([], dtype=np.float64),
+            )
+            
+            for row, (lb, ub) in enumerate(row_bounds):
+                constraint = constraints[row]
+                h.addRow(lb, ub, len(constraint), [c[0] for c in constraint], [c[1] for c in constraint])
+
+            num_x = len(x1) + len(x2)
+            indices = np.arange(num_x, dtype=np.int32)
+            types = np.full(num_x, highspy.HighsVarType.kInteger, dtype=np.uint32)
+            h.changeColsIntegrality(num_x, indices, types)
+            h.setOptionValue("presolve", "on")
+            h.changeObjectiveSense(highspy.ObjSense.kMaximize)
+
+            if team == "13":
+                self.h_br_13 = h
+            else:
+                self.h_br_24 = h
 
     def compute_utility(self, strat13 : Strategy, strat24 : Strategy) -> float:
         payoff13 = np.sum(strat13.seq_form * strat24.all_contribs)

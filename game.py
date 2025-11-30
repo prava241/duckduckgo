@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pickle
 import numpy as np
 import highspy
+from collections import defaultdict
 
 @unique
 class Player(IntEnum):
@@ -217,29 +218,32 @@ class Game:
         y_ind = {y : i + m + n for i, y in enumerate(y)}
         leaf_to_y_ind = [y_ind[action] for action in leaf_to_y]
 
-        constraints = []
+        constraints = defaultdict(list)
         row_bounds = []
         col_bounds = [(0, 1)] * (m + n + k)
 
         row = 0
         for p in team:
             for infoset, v in self.infosets[p].items():
-                constraints += [(row, x_ind[(infoset, action)], 1) for action in v["actions"]]
+                for action in v["actions"]:
+                    constraints[row].append((x_ind[(infoset, action)], 1))
                 last_player_index = infoset.rfind(str_player(p))
                 if last_player_index == -1:
                     row_bounds += [(1, 1)]
                 else:
                     parent = (infoset[:last_player_index-1], action_to_Action(infoset[last_player_index + 3]))
-                    constraints += [(row, x_ind[parent], -1)]
+                    constraints[row].append((x_ind[parent], -1))
                     row_bounds += [(0, 0)]
             row += 1
         
         for x1_val, x2_val in y:
             i = y_ind[(x1_val, x2_val)]
-            constraints += [(row, x_ind[x1_val], 1), (row, i, -1)]
+            constraints[row].append((x_ind[x1_val], 1))
+            constraints[row].append((i, -1))
             row_bounds += [(0, 1)]
             row += 1
-            constraints += [(row, x_ind[x2_val], 1), (row, i, -1)]
+            constraints[row].append((x_ind[x2_val], 1))
+            constraints[row].append((i, -1))
             row_bounds += [(0, 1)]
             row += 1
 
@@ -306,24 +310,55 @@ class Strategy:
     # def load_strategy(self, filenames):
     # def save_strategy(self, filenames):
     
-    def best_response(self, h, num_vars, leaf_to_y_ind) -> Strategy:
+    def best_response(self, h, x1, x2, y, num_vars, leaf_to_y_ind) -> Strategy:
         target_coeffs = [0] * num_vars
-        # TODO: should i add the constant to leaf payoffs or to target_coeffs?
         for i, var in enumerate(leaf_to_y_ind):
             target_coeffs[var] += self.all_contribs[i]
 
-        # TODO: update h with target_coeffs, then run it, then parse output
+        m = min(target_coeffs)
+        if m <= 0:
+            target_coeffs = [t - m + 0.1 for t in target_coeffs]
+
+        for i, t in enumerate(target_coeffs):
+            h.changeColCost(i, t)
+        
+        h.maximize()
+
+        solution = h.getSolution()
+        col_value = list(solution.col_value)
+        value = [col_value[icol]
+                for icol in range(num_vars)]
+        
+        strategy = {}
+        player_strategy_1 = defaultdict(dict)
+        for i, (infoset, action) in x1:
+            player_strategy_1[infoset][action] = value[i]
+        strategy[self.opp_team[0]] = player_strategy_1
+        
+        player_strategy_2 = defaultdict(dict)
+        for i, (infoset, action) in x2:
+            player_strategy_2[infoset][action] = value[i + len(x2)]
+        strategy[self.opp_team[1]] = player_strategy_2
+
+        seq_form = np.array([value[leaf_to_y_ind[i]] for i in range(len(game.leaves))])
+        all_contribs = ((self.game.chance_payoffs_13 * seq_form) 
+                        if self.team_name == "13" 
+                        else (self.game.chance_payoffs_24 * seq_form))
         
         other_team_name = "24" if self.team_name == "13" else "13"
-        return Strategy(game, other_team_name)
+        return Strategy(game,
+                        other_team_name,
+                        strategies=[(strategy, 1)],
+                        seq_form=seq_form,
+                        all_contribs=all_contribs
+                        )
 
 
 
 if __name__ == "__main__":
     game = Game()
     constraints_13 = game.construct_constraints((Player.One, Player.Three))
-    print(len(constraints_13), constraints_13[0][0])
     constraints_24 = game.construct_constraints((Player.Two, Player.Four))
     strategy = Strategy(game, "24")
-    strategy.uniform_strategy()
-    strategy.best_response(constraints_13)
+    strategy.random_strategy()
+    print(strategy.seq_form)
