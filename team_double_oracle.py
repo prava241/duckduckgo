@@ -12,16 +12,11 @@ class TeamDoubleOracle:
         self.utilities: Dict[Tuple[int, int], float] = {}
         self.game = game
 
-        constraints_13 = game.construct_constraints((Player.One, Player.Three))
-        constraints_24 = game.construct_constraints((Player.Two, Player.Four))
-
-        self.n_13 = sum([len(c) for c in constraints_13[0]])
-        self.n_24 = sum([len(c) for c in constraints_24[0]])
-        self.l_13 = constraints_13[2]
-        self.l_24 = constraints_24[2]
+        self.constraints_13 = game.construct_constraints((Player.One, Player.Three))
+        self.constraints_24 = game.construct_constraints((Player.Two, Player.Four))
 
         for team in ("13", "24"):
-            c = constraints_13 if team == "13" else constraints_24
+            c = self.constraints_13 if team == "13" else self.constraints_24
             (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds) = c
             h = highspy.Highs()
             num_vars = len(x1) + len(x2) + len(y)
@@ -58,9 +53,11 @@ class TeamDoubleOracle:
         return payoff13
 
     def iterate(self, trial: int) -> Tuple[bool, Strategy, Strategy]:
-        strat_13, strat_24 = self.get_nash_strategies() # this is the nash equilibrium step
-        br_24 = strat_13.best_response(self.h_br_24, self.n_24, self.l_24)
-        br_13 = strat_24.best_response(self.h_br_13, self.n_13, self.l_13)
+        strat_13, strat_24 = self.get_nash_strategies()
+        (x1, x2, y), _, leaf_to_y_ind, _ = self.constraints_13
+        br_24 = strat_13.best_response(self.h_br_24, x1, x2, y, len(x1) + len(x2) + len(y), leaf_to_y_ind)
+        (x1, x2, y), _, leaf_to_y_ind, _ = self.constraints_13
+        br_13 = strat_24.best_response(self.h_br_13, x1, x2, y, len(x1) + len(x2) + len(y), leaf_to_y_ind)
         self.populations["13"].append(br_13)
         self.populations["24"].append(br_24)
 
