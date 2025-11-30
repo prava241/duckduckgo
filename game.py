@@ -150,15 +150,15 @@ class Game:
                 lines = infos.readlines()
                 for line in lines:
                     parts = line.split()
-                    infoset_lines[parts[1]] = ("P" + str(player), parts[2])
-                # TODO: save infoset ordering
+                    infoset_lines[parts[1]] = ("P" + str(player), parts[2], int(parts[0]))
         
-        nodes[""] = Node("", None, Player.Chance, {}, {}, "") # TODO: add actions
+        nodes[""] = Node("", None, Player.Chance, {}, {}, "")
         for infoset in sorted(infoset_lines.keys(), key = len):
             player = player_to_Player(infoset_lines[infoset][0])
             actions = actions_to_Actions(infoset_lines[infoset][1])
             infosets[player][infoset] = {"nodes" : create_all_nodes(infoset, player, {a : None for a in actions}), 
-                                         "actions" : actions}
+                                         "actions" : actions,
+                                         "line" : infoset_lines[infoset][2]}
 
         self.nodes = nodes
         self.infosets = infosets
@@ -189,11 +189,11 @@ class Game:
         self.chance_payoffs_13 = self.chances * self.payoffs_13
         self.chance_payoffs_24 = self.chance_payoffs_13 * -1
 
-    def save_game(self, filename="game.pkl"):
-        with open(filename, 'wb') as f:
-            pickle.dump(self, f)
+    # def save_game(self, filename="game.pkl"):
+    #     with open(filename, 'wb') as f:
+    #         pickle.dump(self, f)
 
-    def save_constraints(self, team=(Player.One, Player.Three), filename="constraints.pkl"):
+    def construct_constraints(self, team=(Player.One, Player.Three)):
         p1, p2 = team
         player_infosets_1 = self.infosets[p1]
         player_infosets_2 = self.infosets[p2]
@@ -243,17 +243,12 @@ class Game:
             row_bounds += [(0, 1)]
             row += 1
 
-        with open(filename, 'wb') as f:
-            to_save = ((x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds))
-            pickle.dump(to_save, f)
+        return ((x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds))
+        
 
 class Strategy:
-    def __init__(self, team : str, filename="game.pkl", strategies=[], seq_form=np.array([]), all_contribs=np.array([])):
-        if filename is None:
-            self.game = Game()
-        else:
-            with open(filename, 'rb') as f:
-                self.game = pickle.load(f)
+    def __init__(self, game, team : str, strategies: List[Tuple[Dict, float]]=[], seq_form=np.array([]), all_contribs=np.array([])):
+        self.game = game
         self.team_name = team
         self.team = [player_to_Player("P" + p) for p in team]
         self.opp_team = [p for p in players if p not in self.team]
@@ -311,49 +306,24 @@ class Strategy:
     # def load_strategy(self, filenames):
     # def save_strategy(self, filenames):
     
-    def best_response(self) -> Strategy:
-        other_team_name = {"13":"24", "24":"13"}[self.team_name]
-        filename = f"constraints{other_team_name}.pkl"
-        def load_constraints(filename="constraints.pkl"):
-            with open(filename, 'rb') as f:
-                (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds) = pickle.load(f)
-            return (x1, x2, y), (x_ind, y_ind), leaf_to_y_ind, (constraints, row_bounds, col_bounds)
-        
-        def construct_target(num_vars, leaf_to_y_ind):
-            target_coeffs = [0] * num_vars
-            # TODO: should i add the constant to leaf payoffs or to target_coeffs?
-            for i, var in enumerate(leaf_to_y_ind):
-                target_coeffs[var] += self.all_contribs[i]
-            return target_coeffs
+    def best_response(self, h, num_vars, leaf_to_y_ind) -> Strategy:
+        target_coeffs = [0] * num_vars
+        # TODO: should i add the constant to leaf payoffs or to target_coeffs?
+        for i, var in enumerate(leaf_to_y_ind):
+            target_coeffs[var] += self.all_contribs[i]
 
-        load_constraints(filename)
-
-        # TODO: write the Highs code
-        # h = highspy.Highs()
-
-        # h.run()
-        # solution = h.getSolution()
-        # basis = h.getBasis()
-        # info = h.getInfo()
-        # model_status = h.getModelStatus()
-        # print('Model status = ', h.modelStatusToString(model_status))
-        # print()
-        # print('Optimal objective = ', info.objective_function_value)
-        # print('Iteration count = ', info.simplex_iteration_count)
-        # print('Primal solution status = ', h.solutionStatusToString(info.primal_solution_status))
-        # print('Dual solution status = ', h.solutionStatusToString(info.dual_solution_status))
-        # print('Basis validity = ', h.basisValidityToString(info.basis_validity))
+        # TODO: update h with target_coeffs, then run it, then parse output
         
         other_team_name = "24" if self.team_name == "13" else "13"
-        return Strategy(other_team_name)
+        return Strategy(game, other_team_name)
 
 
 
 if __name__ == "__main__":
     game = Game()
-    game.save_game()
-    game.save_constraints((Player.One, Player.Three), "constraints13.pkl")
-    game.save_constraints((Player.Two, Player.Four), "constraints24.pkl")
-    strategy = Strategy("24")
+    constraints_13 = game.construct_constraints((Player.One, Player.Three))
+    print(len(constraints_13), constraints_13[0][0])
+    constraints_24 = game.construct_constraints((Player.Two, Player.Four))
+    strategy = Strategy(game, "24")
     strategy.uniform_strategy()
-    strategy.best_response()
+    strategy.best_response(constraints_13)

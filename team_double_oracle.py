@@ -3,17 +3,25 @@ import numpy as np
 from typing import *
 from dataclasses import dataclass
 from game import *
+import zipfile
 
 class TeamDoubleOracle:
-    def __init__(self, tolerance = 1., game_file="game.pkl"):
+    def __init__(self, game, tolerance = 1.):
         self.populations: Dict[str, List[Strategy]] = {}
         self.tolerance: float = tolerance
         self.utilities: Dict[Tuple[int, int], float] = {}
-        if game_file is None:
-            self.game = Game()
-        else:
-            with open(game_file, 'rb') as f:
-                self.game = pickle.load(f)
+        self.game = game
+
+        constraints_13 = game.construct_constraints((Player.One, Player.Three))
+        constraints_24 = game.construct_constraints((Player.Two, Player.Four))
+
+        self.n_13 = sum([len(c) for c in constraints_13[0]])
+        self.n_24 = sum([len(c) for c in constraints_24[0]])
+        self.l_13 = constraints_13[2]
+        self.l_24 = constraints_24[2]
+
+        self.h_br_13, self.h_br_24 = None, None
+        # initialize h_br_13, h_br_24 using the constraints
 
     def compute_utility(self, strat13 : Strategy, strat24 : Strategy) -> float:
         payoff13 = np.sum(strat13.seq_form * strat24.all_contribs)
@@ -21,7 +29,8 @@ class TeamDoubleOracle:
 
     def iterate(self, trial: int) -> Tuple[bool, Strategy, Strategy]:
         strat_13, strat_24 = self.get_nash_strategies() # this is the nash equilibrium step
-        br_24, br_13 = strat_13.best_response(), strat_24.best_response()
+        br_24 = strat_13.best_response(self.h_br_24, self.n_24, self.l_24)
+        br_13 = strat_24.best_response(self.h_br_13, self.n_13, self.l_13)
         self.populations["13"].append(br_13)
         self.populations["24"].append(br_24)
 
@@ -51,62 +60,48 @@ class TeamDoubleOracle:
             for i, prob in enumerate(mix):
                 pure_strat = self.populations[team][i]
                 team_strategies += [(pure_strat.strategies[0][0], prob)]
-                team_seq_form += pure_strat.seq_form * prob # this should be an np.add ?
+                team_seq_form += pure_strat.seq_form * prob
             team_all_contribs = team_seq_form * (self.game.chance_payoffs_24 if team == "13" else self.game.chance_payoffs_13)
-            nash_strategies += [Strategy(team, "game.pkl", team_strategies, team_seq_form, team_all_contribs)]
+            nash_strategies += [Strategy(self.game, team, team_strategies, team_seq_form, team_all_contribs)]
         return tuple(nash_strategies)
 
-    # TODO will probably have to store the infoset ordering during Game construction
-    def mixture_to_tensors(self, mixture: List[float], team: Tuple[Player, Player]):
-        strategies_1 = self.populations[team[0]]
-        strategies_2 = self.populations[team[1]]
+    def team_strategy_to_tensors(self, strategy: Strategy, team : str):
+        with zipfile.ZipFile(f"team{team}.zip", "w") as zf:
+            with zf.open("meta-strategy.csv", "w") as f1:
+                for i, (pure_strat, prob) in enumerate(strategy.strategies):
+                    f1.write(f"{i},{prob}\n".encode("utf-8"))
+                    for p in team:
+                        player = player_to_Player("P" + p)
+                        player_infosets = self.game.infosets[player]
+                        tensor = np.zeros((len(player_infosets), 3), dtype=np.float64)
+                        for infoset, infoset_info in player_infosets.items():
+                            infoset_line = infoset_info["line"]
+                            for action, action_prob in pure_strat[player][infoset].items():
+                                tensor[infoset_line, action] = action_prob
+                        with zf.open(f"strategy{i}-player{p}.npy", "w") as f:
+                            np.save(f, tensor)
 
-        n = len(mixture)
-        assert len(strategies_1) == n
-        assert len(strategies_2) == n
-
-        infosets = list(strategies_1[0].mapping.keys())
-        m = len(infosets)
-
-        out_1 = np.zeros((m, 3), dtype=np.float64)
-        out_2 = np.zeros((m, 3), dtype=np.float64)
-
-        mix = np.asarray(mixture, dtype=np.float64)
-
-        for mix_weight, strat1, strat2 in zip(mix, strategies_1, strategies_2):
-            for i, infoset in enumerate(infosets):
-                a1 = strat1.strategy[infoset].value - 1
-                a2 = strat2.strategy[infoset].value - 1
-                out_1[i, a1] += mix_weight
-                out_2[i, a2] += mix_weight
-
-        def normalize(arr: np.ndarray) -> np.ndarray:
-            row_sums = arr.sum(axis=1, keepdims=True)
-            row_sums[row_sums == 0.0] = 1.0
-            return arr / row_sums
-
-        return normalize(out_1), normalize(out_2)
-
-    def train(self, num_rand = 3, trials = 1000):
+    def train(self, num_rand = 3, trials = 1000) -> Tuple[Strategy, Strategy]:
         for team in ["13", "24"]:
-            self.populations[team] = [Strategy(team) for _ in range(num_rand)]
+            self.populations[team] = [Strategy(self.game, team) for _ in range(num_rand)]
             for strat in self.populations[team]:
                 strat.random_strategy()
         self.utilities = {(i, j) : self.compute_utility(self.populations["13"][i], self.populations["24"][j]) 
                           for i in range(num_rand) for j in range(num_rand)}
         
-        # TODO: idk this is weird
+        strat_13, strat_24 = self.populations["13"][0], self.populations["24"][0]
+        
         for trial in range(trials):
-            converged, team_mixture, opponent_mixture = self.iterate(trial + num_rand)
+            converged, strat_13, strat_24 = self.iterate(trial + num_rand)
             if converged:
                 print(f"Converged at trial: {trial}")
-                return team_mixture, opponent_mixture
+                return strat_13, strat_24
             if (trial % 100) == 0:
                 print(f"Progress: {(100 * trial) / trials}%")
             
-        return team_mixture, opponent_mixture
+        return strat_13, strat_24
             
 
 if __name__ == "__main__":
-    strategy = Strategy("13")
+    strategy = Strategy(Game(), "13")
     strategy.uniform_strategy()
