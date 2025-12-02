@@ -331,22 +331,22 @@ class Strategy:
         
         strategy = {}
         player_strategy_1 = defaultdict(dict)
-        for i, (infoset, action) in x1:
+        for i, (infoset, action) in enumerate(x1):
             player_strategy_1[infoset][action] = value[i]
         strategy[self.opp_team[0]] = player_strategy_1
         
         player_strategy_2 = defaultdict(dict)
-        for i, (infoset, action) in x2:
+        for i, (infoset, action) in enumerate(x2):
             player_strategy_2[infoset][action] = value[i + len(x2)]
         strategy[self.opp_team[1]] = player_strategy_2
 
-        seq_form = np.array([value[leaf_to_y_ind[i]] for i in range(len(game.leaves))])
+        seq_form = np.array([value[leaf_to_y_ind[i]] for i in range(len(self.game.leaves))])
         all_contribs = ((self.game.chance_payoffs_13 * seq_form) 
                         if self.team_name == "13" 
                         else (self.game.chance_payoffs_24 * seq_form))
         
         other_team_name = "24" if self.team_name == "13" else "13"
-        return Strategy(game,
+        return Strategy(self.game,
                         other_team_name,
                         strategies=[(strategy, 1)],
                         seq_form=seq_form,

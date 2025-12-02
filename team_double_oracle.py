@@ -53,7 +53,7 @@ class TeamDoubleOracle:
         return payoff13
 
     def iterate(self, trial: int) -> Tuple[bool, Strategy, Strategy]:
-        strat_13, strat_24 = self.get_nash_strategies()
+        strat_13, strat_24 = self.get_nash_strategies(trial-1) # trial or trial - 1?
         (x1, x2, y), _, leaf_to_y_ind, _ = self.constraints_13
         br_24 = strat_13.best_response(self.h_br_24, x1, x2, y, len(x1) + len(x2) + len(y), leaf_to_y_ind)
         (x1, x2, y), _, leaf_to_y_ind, _ = self.constraints_13
@@ -76,12 +76,72 @@ class TeamDoubleOracle:
             self.utilities[(trial, i)] = self.compute_utility(self.populations["13"][trial], self.populations["24"][i])
         self.utilities[(trial, trial)] = self.compute_utility(self.populations["13"][trial], self.populations["24"][trial])
         
-    def get_nash_strategies(self) -> Tuple[Strategy, Strategy]:
-        # TODO: get the actual Nash mixture
-        mixtures = [("13", []), ("24", [])] # say this is two lists of probs
+    def get_nash_strategies(self, trial: int) -> Tuple[Strategy, Strategy]:
+        mixtures = {}
+
+        inf = highspy.kHighsInf
+        num_vars = trial + 1
+
+        team_13_lp = highspy.Highs()
+        team_13_lp.addCols(
+            num_vars,
+            np.array([0] * trial + [1], dtype=np.float64),
+            np.array([0] * trial + [-1*inf], dtype=np.float64),
+            np.array([1] * trial + [inf], dtype=np.float64),
+            0,
+            np.array([], dtype=np.int32),
+            np.array([], dtype=np.int32),
+            np.array([], dtype=np.float64),
+        )
+        for j in range(trial):
+            team_13_lp.addRow(0, inf, num_vars, [self.utilities[(i, j)] for i in range(trial)] + [-1], list(range(num_vars)))
+        team_13_lp.addRow(1, 1, trial, [1]*trial, list(range(trial)))
+
+        team_13_lp.setOptionValue("presolve", "on")
+        team_13_lp.changeObjectiveSense(highspy.ObjSense.kMaximize)
+
+        team_13_lp.maximize()
+
+        solution = team_13_lp.getSolution()
+        col_value = list(solution.col_value)
+        value = [col_value[icol]
+                for icol in range(num_vars)]
+        
+        mixtures["13"] = value[:-1]
+        v = value[-1]
+        print(f"Trial {trial}: Team 13 value from team 13 LP is {v}\n")
+
+        team_24_lp = highspy.Highs()
+        team_24_lp.addCols(
+            num_vars,
+            np.array([0] * trial + [1], dtype=np.float64),
+            np.array([0] * trial + [-1*inf], dtype=np.float64),
+            np.array([1] * trial + [inf], dtype=np.float64),
+            0,
+            np.array([], dtype=np.int32),
+            np.array([], dtype=np.int32),
+            np.array([], dtype=np.float64),
+        )
+        for i in range(trial):
+            team_24_lp.addRow(-1*inf, 0, num_vars, [self.utilities[(i, j)] for j in range(trial)] + [-1], list(range(num_vars)))
+        team_24_lp.addRow(1, 1, trial, [1]*trial, list(range(trial)))
+
+        team_24_lp.setOptionValue("presolve", "on")
+        team_24_lp.changeObjectiveSense(highspy.ObjSense.kMinimize)
+
+        team_24_lp.minimize()
+
+        solution = team_24_lp.getSolution()
+        col_value = list(solution.col_value)
+        value = [col_value[icol]
+                for icol in range(num_vars)]
+        
+        mixtures["24"] = value[:-1]
+        w = value[-1]
+        print(f"Trial {trial}: Team 13 value from team 24 LP is {w}\n")
 
         nash_strategies = []
-        for team, mix in mixtures:
+        for team, mix in mixtures.items():
             team_strategies = []
             team_seq_form = np.zeros(len(self.game.leaves))
             for i, prob in enumerate(mix):
@@ -130,5 +190,5 @@ class TeamDoubleOracle:
             
 
 if __name__ == "__main__":
-    strategy = Strategy(Game(), "13")
-    strategy.uniform_strategy()
+    t = TeamDoubleOracle(Game(), tolerance=1)
+    t.train(num_rand=2, trials=5)
