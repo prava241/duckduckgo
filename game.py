@@ -358,8 +358,10 @@ class Strategy:
 
 if __name__ == "__main__":
     game = Game()
-    constraints_13 = game.construct_constraints((Player.One, Player.Three))
-    constraints_24 = game.construct_constraints((Player.Two, Player.Four))
-    strategy = Strategy(game, "24")
-    strategy.random_strategy()
-    print(strategy.seq_form)
+    print(sum([leaf.chance for leaf in game.leaves]))
+    print(len(game.leaves))
+    # constraints_13 = game.construct_constraints((Player.One, Player.Three))
+    # constraints_24 = game.construct_constraints((Player.Two, Player.Four))
+    # strategy = Strategy(game, "24")
+    # strategy.random_strategy()
+    # print(strategy.seq_form)

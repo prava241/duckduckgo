@@ -153,21 +153,26 @@ class TeamDoubleOracle:
             nash_strategies += [Strategy(self.game, team, team_strategies, team_seq_form, team_all_contribs)]
         return tuple(nash_strategies)
 
-    def team_strategy_to_tensors(self, strategy: Strategy, team : str):
+    def team_strategy_to_tensors(self, strategy: Strategy, team: str):
         with zipfile.ZipFile(f"team{team}.zip", "w") as zf:
             with zf.open("meta-strategy.csv", "w") as f1:
-                for i, (pure_strat, prob) in enumerate(strategy.strategies):
+                for i, (_, prob) in enumerate(strategy.strategies):
                     f1.write(f"{i},{prob}\n".encode("utf-8"))
-                    for p in team:
-                        player = player_to_Player("P" + p)
-                        player_infosets = self.game.infosets[player]
-                        tensor = np.zeros((len(player_infosets), 3), dtype=np.float64)
-                        for infoset, infoset_info in player_infosets.items():
-                            infoset_line = infoset_info["line"]
-                            for action, action_prob in pure_strat[player][infoset].items():
-                                tensor[infoset_line, action] = action_prob
-                        with zf.open(f"strategy{i}-player{p}.npy", "w") as f:
-                            np.save(f, tensor)
+
+            for i, (pure_strat, _) in enumerate(strategy.strategies):
+                for p in team:
+                    player = player_to_Player("P" + p)
+                    player_infosets = self.game.infosets[player]
+
+                    tensor = np.zeros((len(player_infosets), 3), dtype=np.float64)
+                    for infoset, infoset_info in player_infosets.items():
+                        infoset_line = infoset_info["line"]
+                        for action, action_prob in pure_strat[player][infoset].items():
+                            tensor[infoset_line, action] = action_prob
+
+                    with zf.open(f"strategy{i}-player{p}.npy", "w") as f:
+                        np.save(f, tensor)
+
 
     def train(self, num_rand = 3, trials = 1000) -> Tuple[Strategy, Strategy]:
         for team in ["13", "24"]:
@@ -186,7 +191,9 @@ class TeamDoubleOracle:
                 return strat_13, strat_24
             if (trial % 100) == 0:
                 print(f"Progress: {(100 * trial) / trials}%")
-            
+        
+        self.team_strategy_to_tensors(strat_13, "13")
+        self.team_strategy_to_tensors(strat_24, "24")
         return strat_13, strat_24
             
 
