@@ -48,6 +48,8 @@ class TeamDoubleOracle:
             else:
                 self.h_br_24 = h
 
+            print(f"Formulated Constraints for {team}")
+
     def compute_utility(self, strat13 : Strategy, strat24 : Strategy) -> float:
         payoff13 = np.sum(strat13.seq_form * strat24.all_contribs)
         return payoff13
@@ -78,6 +80,7 @@ class TeamDoubleOracle:
         
     def get_nash_strategies(self, trial: int) -> Tuple[Strategy, Strategy]:
         mixtures = {}
+        print(f"Running get_nash_strategies {trial}")
 
         inf = highspy.kHighsInf
         num_vars = trial + 1
@@ -94,12 +97,11 @@ class TeamDoubleOracle:
             np.array([], dtype=np.float64),
         )
         for j in range(trial):
-            team_13_lp.addRow(0, inf, num_vars, [self.utilities[(i, j)] for i in range(trial)] + [-1], list(range(num_vars)))
-        team_13_lp.addRow(1, 1, trial, [1]*trial, list(range(trial)))
+            team_13_lp.addRow(0, inf, num_vars, list(range(num_vars)), [self.utilities[(i, j)] for i in range(trial)] + [-1])
+        team_13_lp.addRow(1, 1, trial, list(range(trial)), [1]*trial)
 
         team_13_lp.setOptionValue("presolve", "on")
         team_13_lp.changeObjectiveSense(highspy.ObjSense.kMaximize)
-
         team_13_lp.maximize()
 
         solution = team_13_lp.getSolution()
@@ -123,12 +125,11 @@ class TeamDoubleOracle:
             np.array([], dtype=np.float64),
         )
         for i in range(trial):
-            team_24_lp.addRow(-1*inf, 0, num_vars, [self.utilities[(i, j)] for j in range(trial)] + [-1], list(range(num_vars)))
-        team_24_lp.addRow(1, 1, trial, [1]*trial, list(range(trial)))
+            team_24_lp.addRow(-1*inf, 0, num_vars, list(range(num_vars)), [self.utilities[(i, j)] for j in range(trial)] + [-1])
+        team_24_lp.addRow(1, 1, trial, list(range(trial)), [1]*trial)
 
         team_24_lp.setOptionValue("presolve", "on")
         team_24_lp.changeObjectiveSense(highspy.ObjSense.kMinimize)
-
         team_24_lp.minimize()
 
         solution = team_24_lp.getSolution()

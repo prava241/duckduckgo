@@ -322,6 +322,7 @@ class Strategy:
         for i, t in enumerate(target_coeffs):
             h.changeColCost(i, t)
         
+        print(f"Running best response against team {self.team} strategy")
         h.maximize()
 
         solution = h.getSolution()
