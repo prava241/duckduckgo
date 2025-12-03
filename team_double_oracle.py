@@ -77,6 +77,8 @@ class TeamDoubleOracle:
             self.utilities[(i, trial)] = self.compute_utility(self.populations["13"][i], self.populations["24"][trial])
             self.utilities[(trial, i)] = self.compute_utility(self.populations["13"][trial], self.populations["24"][i])
         self.utilities[(trial, trial)] = self.compute_utility(self.populations["13"][trial], self.populations["24"][trial])
+
+        print(self.utilities)
         
     def get_nash_strategies(self, trial: int) -> Tuple[Strategy, Strategy]:
         mixtures = {}
