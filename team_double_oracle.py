@@ -170,6 +170,8 @@ class TeamDoubleOracle:
                     for infoset, infoset_info in player_infosets.items():
                         infoset_line = infoset_info["line"]
                         for action, action_prob in pure_strat[player][infoset].items():
+                            #Row sums:
+                            #print(sum(action_prob for _, action_prob in pure_strat[player][infoset].items()))
                             tensor[infoset_line, action] = action_prob
 
                     with zf.open(f"strategy{i}-player{p}.npy", "w") as f:

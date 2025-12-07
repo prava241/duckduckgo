@@ -124,8 +124,6 @@ class Game:
                     infoset[indices[2] + 1 :])
                 parent = '/'.join(node_str.split('/')[:-1]) if '/' in node_str else ""
 
-                # if the parent is not in nodes (this could happen since the node after player 4 plays before the community card comes out)
-                # assert that the last element in split is a chance action
                 if parent not in nodes:
                     parent2 = '/'.join(parent.split('/')[:-1]) if '/' in parent else ""
                     parent_node = Node(parent, nodes[parent2], Player.Chance, {}, {node_str[-1] : None}, "")
@@ -210,8 +208,10 @@ class Game:
         def last_actions(leaf_node):
             last_action_1 = [(i, a) for (p, i, a) in leaf_node.history if p == p1][-1]
             last_action_2 = [(i, a) for (p, i, a) in leaf_node.history if p == p2][-1]
+            print(last_action_1)
             return (last_action_1, last_action_2)
         
+      
         leaf_to_y = [last_actions(leaf) for leaf in self.leaves]
         y = list(set(leaf_to_y))
         k = len(y)
@@ -234,7 +234,7 @@ class Game:
                     parent = (infoset[:last_player_index-1], action_to_Action(infoset[last_player_index + 3]))
                     constraints[row].append((x_ind[parent], -1))
                     row_bounds += [(0, 0)]
-            row += 1
+                row += 1
         
         for x1_val, x2_val in y:
             i = y_ind[(x1_val, x2_val)]
