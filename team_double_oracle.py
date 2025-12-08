@@ -36,11 +36,12 @@ class TeamDoubleOracle:
                 constraint = constraints[row]
                 h.addRow(lb, ub, len(constraint), [c[0] for c in constraint], [c[1] for c in constraint])
 
-            num_x = len(x1) + len(x2)
-            indices = np.arange(num_x, dtype=np.int32)
-            types = np.full(num_x, highspy.HighsVarType.kInteger, dtype=np.uint32)
-            h.changeColsIntegrality(num_x, indices, types)
+            # num_x = len(x1) + len(x2)
+            # indices = np.arange(num_x, dtype=np.int32)
+            # types = np.full(num_x, highspy.HighsVarType.kInteger, dtype=np.uint32)
+            # h.changeColsIntegrality(num_x, indices, types)
             h.setOptionValue("presolve", "on")
+            h.setOptionValue("output_flag", False)
             h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
             if team == "13":
@@ -50,12 +51,52 @@ class TeamDoubleOracle:
 
             print(f"Formulated Constraints for {team}")
 
+        # print(f"Formulating Constraints")
+        # self.constraints_13 = game.construct_constraints_lp_fast_vectorized((Player.One, Player.Three))
+        # self.constraints_24 = game.construct_constraints_lp_fast_vectorized((Player.Two, Player.Four))
+
+        # for team in ("13", "24"):
+        #     print(f"Inputting Constraints for {team}")
+        #     c = self.constraints_13 if team == "13" else self.constraints_24
+        #     (x1, x2), x_ind, leaf_to_ind, (constraints, row_bounds) = c
+        #     h = highspy.Highs()
+        #     num_vars = (len(x1) + len(x2) + 1)**2
+
+        #     h.addCols(
+        #         num_vars,
+        #         np.array([0] * num_vars, dtype=np.float64),
+        #         np.array([0] * num_vars, dtype=np.float64),
+        #         np.array([1] * num_vars, dtype=np.float64),
+        #         0,  
+        #         np.array([], dtype=np.int32),
+        #         np.array([], dtype=np.int32),
+        #         np.array([], dtype=np.float64),
+        #     )
+            
+        #     for row, (lb, ub) in enumerate(row_bounds):
+        #         constraint = constraints[row]
+        #         h.addRow(lb, ub, len(constraint), [c[0] for c in constraint], [c[1] for c in constraint])
+
+        #     num_x = len(x1) + len(x2)
+        #     # indices = np.arange(num_x, dtype=np.int32)
+        #     # types = np.full(num_x, highspy.HighsVarType.kInteger, dtype=np.uint32)
+        #     # h.changeColsIntegrality(num_x, indices, types)
+        #     h.setOptionValue("presolve", "on")
+        #     h.changeObjectiveSense(highspy.ObjSense.kMaximize)
+
+        #     if team == "13":
+        #         self.h_br_13 = h
+        #     else:
+        #         self.h_br_24 = h
+
+        #     print(f"Inputted Constraints for {team}")
+
     def compute_utility(self, strat13 : Strategy, strat24 : Strategy) -> float:
         payoff13 = np.sum(strat13.seq_form * strat24.all_contribs)
         return payoff13
 
     def iterate(self, trial: int) -> Tuple[bool, Strategy, Strategy]:
-        strat_13, strat_24 = self.get_nash_strategies(trial-1) # trial or trial - 1?
+        strat_13, strat_24 = self.get_nash_strategies(trial)
         (x1, x2, y), _, leaf_to_y_ind, _ = self.constraints_13
         br_24 = strat_13.best_response(self.h_br_24, x1, x2, y, len(x1) + len(x2) + len(y), leaf_to_y_ind)
         (x1, x2, y), _, leaf_to_y_ind, _ = self.constraints_13
@@ -98,11 +139,12 @@ class TeamDoubleOracle:
             np.array([], dtype=np.int32),
             np.array([], dtype=np.float64),
         )
-        for j in range(trial):
+        for j in range(trial): # U(your strategy, other player plays j) >= v
             team_13_lp.addRow(0, inf, num_vars, list(range(num_vars)), [self.utilities[(i, j)] for i in range(trial)] + [-1])
-        team_13_lp.addRow(1, 1, trial, list(range(trial)), [1]*trial)
+        team_13_lp.addRow(1, 1, trial, list(range(trial)), [1]*trial) # norm
 
         team_13_lp.setOptionValue("presolve", "on")
+        team_13_lp.setOptionValue("output_flag", False)
         team_13_lp.changeObjectiveSense(highspy.ObjSense.kMaximize)
         team_13_lp.maximize()
 
@@ -131,6 +173,7 @@ class TeamDoubleOracle:
         team_24_lp.addRow(1, 1, trial, list(range(trial)), [1]*trial)
 
         team_24_lp.setOptionValue("presolve", "on")
+        team_24_lp.setOptionValue("output_flag", False)
         team_24_lp.changeObjectiveSense(highspy.ObjSense.kMinimize)
         team_24_lp.minimize()
 
@@ -142,6 +185,7 @@ class TeamDoubleOracle:
         mixtures["24"] = value[:-1]
         w = value[-1]
         print(f"Trial {trial}: Team 13 value from team 24 LP is {w}\n")
+        print(mixtures)
 
         nash_strategies = []
         for team, mix in mixtures.items():
@@ -177,6 +221,7 @@ class TeamDoubleOracle:
 
 
     def train(self, num_rand = 3, trials = 1000) -> Tuple[Strategy, Strategy]:
+        print(f"initializing {num_rand} random strategies")
         for team in ["13", "24"]:
             self.populations[team] = [Strategy(self.game, team) for _ in range(num_rand)]
             for strat in self.populations[team]:
@@ -201,4 +246,4 @@ class TeamDoubleOracle:
 
 if __name__ == "__main__":
     t = TeamDoubleOracle(Game(), tolerance=1)
-    t.train(num_rand=2, trials=5)
+    t.train(num_rand=2, trials=50)
