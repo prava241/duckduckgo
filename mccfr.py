@@ -8,7 +8,7 @@ TRIALS = 1000000
 REPORT_PER = max(1, TRIALS // 100)
 SAVE_PER = 100000
 EPSILON = .25
-GAMMA = .99999
+GAMMA = .999
 
 class Node:
     def __init__(self, path):
@@ -198,7 +198,7 @@ class MCCFRTrainer:
             
             for a in acts:
                 regret = action_utils[a] - node_util
-                self.regret[player_team][key][a] += opp_reach * regret
+                self.regret[player_team][key][a] = (self.regret[player_team][key][a] * GAMMA) + (opp_reach * regret)
             
             teammate_reach = 1.0
             for p in self.team_players[traversing_team]:
@@ -235,10 +235,6 @@ class MCCFRTrainer:
                 reach_team0 = {1: 1.0, 3: 1.0}
                 reach_team1 = {2: 1.0, 4: 1.0}
                 self.external_sampling_cfr(self.root, reach_team0, reach_team1, team)
-                for team in [0,1]:
-                    for key in self.regret[team]:
-                        for a in self.regret[team][key]:
-                            self.regret[team][key][a] *= GAMMA
             if t % REPORT_PER == 0:
                 minutes_from_start = (time.time() - self.start_time) / 60
                 minutes_projected_left = ((float(iterations - t) / t) * minutes_from_start)
