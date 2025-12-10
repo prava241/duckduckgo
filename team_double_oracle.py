@@ -246,4 +246,4 @@ class TeamDoubleOracle:
 
 if __name__ == "__main__":
     t = TeamDoubleOracle(Game(), tolerance=1)
-    t.train(num_rand=2, trials=50)
+    t.train(num_rand=20, trials=500)
