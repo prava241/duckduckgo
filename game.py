@@ -36,7 +36,7 @@ class Node:
         self.parent : Node = parent
         self.player : Player = player
         self.actions : Dict[Action, Node | LeafNode] = actions
-        self.chance_actions : Dict[str, Node | LeafNode | None] = chance_actions
+        self.chance_actions : Dict[str, Node | LeafNode] = chance_actions
         self.action_payoffs : Dict[Action, Dict[str, float]] = {}
         self.infoset : str = infoset
         self.history : List[Tuple[Player, str, Action]] = (self.parent.history + 
@@ -126,10 +126,10 @@ class Game:
 
                 if parent not in nodes:
                     parent2 = '/'.join(parent.split('/')[:-1]) if '/' in parent else ""
-                    parent_node = Node(parent, nodes[parent2], Player.Chance, {}, {node_str[-1] : None}, "")
+                    parent_node = Node(parent, nodes[parent2], Player.Chance, {}, {node_str[-1] : nodes[""]}, "")
                     nodes[parent] = parent_node
                 elif nodes[parent].player == Player.Chance:
-                    nodes[parent].chance_actions[node_str[-1]] = None
+                    nodes[parent].chance_actions[node_str[-1]] = nodes[""]
 
                 if node_str not in nodes:
                     node = Node(node_str, nodes[parent], player, actions, {}, infoset)
